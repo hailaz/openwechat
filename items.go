@@ -108,7 +108,7 @@ func (s SyncCheckResponse) Err() error {
 	if s.Success() {
 		return nil
 	}
-	i, err := strconv.ParseInt(s.RetCode, 16, 10)
+	i, err := strconv.Atoi(s.RetCode)
 	if err != nil {
 		return errors.New("sync check unknown error")
 	}

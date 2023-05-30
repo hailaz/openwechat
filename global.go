@@ -1,13 +1,13 @@
 package openwechat
 
 import (
-	"errors"
 	"regexp"
 )
 
 var (
 	uuidRegexp        = regexp.MustCompile(`uuid = "(.*?)";`)
 	statusCodeRegexp  = regexp.MustCompile(`window.code=(\d+);`)
+	avatarRegexp      = regexp.MustCompile(`window.userAvatar = '(.*)';`)
 	syncCheckRegexp   = regexp.MustCompile(`window.synccheck=\{retcode:"(\d+)",selector:"(\d+)"\}`)
 	redirectUriRegexp = regexp.MustCompile(`window.redirect_uri="(.*?)"`)
 )
@@ -98,20 +98,6 @@ const (
 	AppMsgTypeReaderType            AppMessageType = 100001 //自定义的消息
 )
 
-// 登录状态
-const (
-	StatusSuccess = "200"
-	StatusScanned = "201"
-	StatusTimeout = "400"
-	StatusWait    = "408"
-)
-
-// errors
-var (
-	ErrNoSuchUserFoundError = errors.New("no such user found")
-	ErrLoginTimeout         = errors.New("login timeout")
-)
-
 // ALL 跟search函数搭配
 //
 //	friends.Search(openwechat.ALL, )
@@ -143,8 +129,7 @@ var imageType = map[string]struct{}{
 	"jpg":  {},
 }
 
-var videoType = "mp4"
+const videoType = "mp4"
 
-// ZombieText 检测僵尸好友字符串
-// 发送该字符给好友，能正常发送不报错的为正常好友，否则为僵尸好友
-const ZombieText = "وُحfخe ̷̴̐nخg ̷̴̐cخh ̷̴̐aخo امارتيخ ̷̴̐خ\n"
+// FileHelper 文件传输助手
+const FileHelper = "filehelper"

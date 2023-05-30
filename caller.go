@@ -3,10 +3,10 @@ package openwechat
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 )
@@ -50,8 +50,8 @@ func (c *Caller) GetLoginUUID() (string, error) {
 }
 
 // CheckLogin 检查是否登录成功
-func (c *Caller) CheckLogin(uuid string) (*CheckLoginResponse, error) {
-	resp, err := c.Client.CheckLogin(uuid)
+func (c *Caller) CheckLogin(uuid, tip string) (CheckLoginResponse, error) {
+	resp, err := c.Client.CheckLogin(uuid, tip)
 	if err != nil {
 		return nil, err
 	}
@@ -61,41 +61,38 @@ func (c *Caller) CheckLogin(uuid string) (*CheckLoginResponse, error) {
 	if _, err := buffer.ReadFrom(resp.Body); err != nil {
 		return nil, err
 	}
-	// 正则匹配检测的code
-	// 具体code参考global.go
-	results := statusCodeRegexp.FindSubmatch(buffer.Bytes())
-	if len(results) != 2 {
-		return nil, errors.New("error status code match")
-	}
-	code := string(results[1])
-	return &CheckLoginResponse{Code: code, Raw: buffer.Bytes()}, nil
+	return buffer.Bytes(), nil
 }
 
 // GetLoginInfo 获取登录信息
-func (c *Caller) GetLoginInfo(body []byte) (*LoginInfo, error) {
+func (c *Caller) GetLoginInfo(path *url.URL) (*LoginInfo, error) {
 	// 从响应体里面获取需要跳转的url
-	results := redirectUriRegexp.FindSubmatch(body)
-	if len(results) != 2 {
-		return nil, errors.New("redirect url does not match")
-	}
-	path, err := url.Parse(string(results[1]))
+	query := path.Query()
+	query.Set("version", "v2")
+	path.RawQuery = query.Encode()
+	resp, err := c.Client.GetLoginInfo(path)
 	if err != nil {
 		return nil, err
 	}
-	c.Client.Domain = WechatDomain(path.Host)
-	resp, err := c.Client.GetLoginInfo(path.String())
-	if err != nil {
-		return nil, err
-	}
-	// 判断是否重定向
-	if resp.StatusCode != http.StatusMovedPermanently {
-		return nil, fmt.Errorf("%w: try to login with Desktop Mode", ErrForbidden)
-	}
+	// 微信 v2 版本修复了301 response missing Location header 的问题
 	defer func() { _ = resp.Body.Close() }()
 
+	if _, exists := CookieGroup(resp.Cookies()).GetByName("wxuin"); !exists {
+		err = ErrForbidden
+		if c.Client.mode != desktop {
+			err = fmt.Errorf("%w: try to login with desktop mode", err)
+		}
+		return nil, err
+	}
+
+	bs, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	var loginInfo LoginInfo
 	// xml结构体序列化储存
-	if err := scanXml(resp.Body, &loginInfo); err != nil {
+	// 确保传入的reader实现了io.ByteReader接口
+	if err = xml.NewDecoder(bytes.NewBuffer(bs)).Decode(&loginInfo); err != nil {
 		return nil, err
 	}
 	if !loginInfo.Ok() {
@@ -112,7 +109,7 @@ func (c *Caller) WebInit(request *BaseRequest) (*WebInitResponse, error) {
 	}
 	var webInitResponse WebInitResponse
 	defer func() { _ = resp.Body.Close() }()
-	if err := scanJson(resp.Body, &webInitResponse); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&webInitResponse); err != nil {
 		return nil, err
 	}
 	if !webInitResponse.BaseResponse.Ok() {
@@ -140,16 +137,10 @@ func (c *Caller) SyncCheck(request *BaseRequest, info *LoginInfo, response *WebI
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var buffer bytes.Buffer
-	if _, err := buffer.ReadFrom(resp.Body); err != nil {
+	if _, err = buffer.ReadFrom(resp.Body); err != nil {
 		return nil, err
 	}
-	results := syncCheckRegexp.FindSubmatch(buffer.Bytes())
-	if len(results) != 3 {
-		return nil, errors.New("parse sync key failed")
-	}
-	retCode, selector := string(results[1]), string(results[2])
-	syncCheckResponse := &SyncCheckResponse{RetCode: retCode, Selector: selector}
-	return syncCheckResponse, nil
+	return NewSyncCheckResponse(buffer.Bytes())
 }
 
 // WebWxGetContact 获取所有的联系人
@@ -162,7 +153,7 @@ func (c *Caller) WebWxGetContact(info *LoginInfo) (Members, error) {
 			return nil, err
 		}
 		var item WebWxContactResponse
-		if err = scanJson(resp.Body, &item); err != nil {
+		if err = json.NewDecoder(resp.Body).Decode(&item); err != nil {
 			_ = resp.Body.Close()
 			return nil, err
 		}
@@ -191,7 +182,7 @@ func (c *Caller) WebWxBatchGetContact(members Members, request *BaseRequest) (Me
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var item WebWxBatchContactResponse
-	if err := scanJson(resp.Body, &item); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&item); err != nil {
 		return nil, err
 	}
 	if !item.BaseResponse.Ok() {
@@ -208,7 +199,7 @@ func (c *Caller) WebWxSync(request *BaseRequest, response *WebInitResponse, info
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var webWxSyncResponse WebWxSyncResponse
-	if err := scanJson(resp.Body, &webWxSyncResponse); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&webWxSyncResponse); err != nil {
 		return nil, err
 	}
 	return &webWxSyncResponse, nil
@@ -244,10 +235,8 @@ func (c *Caller) UploadMedia(file *os.File, request *BaseRequest, info *LoginInf
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-
 	var item UploadResponse
-
-	if err := scanJson(resp.Body, &item); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&item); err != nil {
 		return &item, err
 	}
 	if !item.BaseResponse.Ok() {
@@ -260,7 +249,12 @@ func (c *Caller) UploadMedia(file *os.File, request *BaseRequest, info *LoginInf
 }
 
 // WebWxSendImageMsg 发送图片消息接口
-func (c *Caller) WebWxSendImageMsg(file *os.File, request *BaseRequest, info *LoginInfo, fromUserName, toUserName string) (*SentMessage, error) {
+func (c *Caller) WebWxSendImageMsg(reader io.Reader, request *BaseRequest, info *LoginInfo, fromUserName, toUserName string) (*SentMessage, error) {
+	file, cb, err := readerToFile(reader)
+	if err != nil {
+		return nil, err
+	}
+	defer cb()
 	// 首先尝试上传图片
 	var mediaId string
 	{
@@ -282,7 +276,12 @@ func (c *Caller) WebWxSendImageMsg(file *os.File, request *BaseRequest, info *Lo
 	return parser.SentMessage(msg)
 }
 
-func (c *Caller) WebWxSendFile(file *os.File, req *BaseRequest, info *LoginInfo, fromUserName, toUserName string) (*SentMessage, error) {
+func (c *Caller) WebWxSendFile(reader io.Reader, req *BaseRequest, info *LoginInfo, fromUserName, toUserName string) (*SentMessage, error) {
+	file, cb, err := readerToFile(reader)
+	if err != nil {
+		return nil, err
+	}
+	defer cb()
 	resp, err := c.UploadMedia(file, req, info, fromUserName, toUserName)
 	if err != nil {
 		return nil, err
@@ -298,7 +297,12 @@ func (c *Caller) WebWxSendFile(file *os.File, req *BaseRequest, info *LoginInfo,
 	return c.WebWxSendAppMsg(msg, req)
 }
 
-func (c *Caller) WebWxSendVideoMsg(file *os.File, request *BaseRequest, info *LoginInfo, fromUserName, toUserName string) (*SentMessage, error) {
+func (c *Caller) WebWxSendVideoMsg(reader io.Reader, request *BaseRequest, info *LoginInfo, fromUserName, toUserName string) (*SentMessage, error) {
+	file, cb, err := readerToFile(reader)
+	if err != nil {
+		return nil, err
+	}
+	defer cb()
 	var mediaId string
 	{
 		resp, err := c.UploadMedia(file, request, info, fromUserName, toUserName)
@@ -369,8 +373,8 @@ func (c *Caller) RemoveFriendFromChatRoom(req *BaseRequest, info *LoginInfo, gro
 }
 
 // WebWxVerifyUser 同意加好友请求
-func (c *Caller) WebWxVerifyUser(storage *Storage, info RecommendInfo, verifyContent string) error {
-	resp, err := c.Client.WebWxVerifyUser(storage, info, verifyContent)
+func (c *Caller) WebWxVerifyUser(session *Session, info RecommendInfo, verifyContent string) error {
+	resp, err := c.Client.WebWxVerifyUser(session, info, verifyContent)
 	if err != nil {
 		return err
 	}
@@ -413,7 +417,7 @@ func (c *Caller) WebWxRelationPin(request *BaseRequest, user *User, op uint8) er
 }
 
 // WebWxPushLogin 免扫码登陆接口
-func (c *Caller) WebWxPushLogin(uin int) (*PushLoginResponse, error) {
+func (c *Caller) WebWxPushLogin(uin int64) (*PushLoginResponse, error) {
 	resp, err := c.Client.WebWxPushLogin(uin)
 	if err != nil {
 		return nil, err
@@ -471,7 +475,7 @@ type MessageResponseParser struct {
 // Err 解析错误
 func (p *MessageResponseParser) Err() error {
 	var item struct{ BaseResponse BaseResponse }
-	if err := scanJson(p.Reader, &item); err != nil {
+	if err := json.NewDecoder(p.Reader).Decode(&item); err != nil {
 		return err
 	}
 	if !item.BaseResponse.Ok() {
@@ -483,7 +487,7 @@ func (p *MessageResponseParser) Err() error {
 // MsgID 解析消息ID
 func (p *MessageResponseParser) MsgID() (string, error) {
 	var messageResp MessageResponse
-	if err := scanJson(p.Reader, &messageResp); err != nil {
+	if err := json.NewDecoder(p.Reader).Decode(&messageResp); err != nil {
 		return "", err
 	}
 	if !messageResp.BaseResponse.Ok() {
@@ -499,4 +503,30 @@ func (p *MessageResponseParser) SentMessage(msg *SendMessage) (*SentMessage, err
 		return nil, err
 	}
 	return &SentMessage{MsgId: msgID, SendMessage: msg}, nil
+}
+
+func readerToFile(reader io.Reader) (file *os.File, cb func(), err error) {
+	var ok bool
+	if file, ok = reader.(*os.File); ok {
+		return file, func() {}, nil
+	}
+	file, err = os.CreateTemp("", "*")
+	if err != nil {
+		return nil, nil, err
+	}
+	cb = func() {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+	}
+	_, err = io.Copy(file, reader)
+	if err != nil {
+		cb()
+		return nil, nil, err
+	}
+	_, err = file.Seek(0, io.SeekStart)
+	if err != nil {
+		cb()
+		return nil, nil, err
+	}
+	return file, cb, nil
 }

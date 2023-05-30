@@ -3,34 +3,32 @@ package openwechat
 import (
 	"io"
 	"os"
+	"sync"
 )
-
-// Storage 身份信息, 维持整个登陆的Session会话
-type Storage struct {
-	LoginInfo *LoginInfo
-	Request   *BaseRequest
-	Response  *WebInitResponse
-}
 
 type HotReloadStorageItem struct {
 	Jar          *Jar
 	BaseRequest  *BaseRequest
 	LoginInfo    *LoginInfo
 	WechatDomain WechatDomain
+	SyncKey      *SyncKey
 	UUID         string
 }
 
 // HotReloadStorage 热登陆存储接口
 type HotReloadStorage io.ReadWriter
 
-// jsonFileHotReloadStorage 实现HotReloadStorage接口
-// 默认以json文件的形式存储
-type jsonFileHotReloadStorage struct {
+// fileHotReloadStorage 实现HotReloadStorage接口
+// 以文件的形式存储
+type fileHotReloadStorage struct {
 	filename string
 	file     *os.File
+	lock     sync.Mutex
 }
 
-func (j *jsonFileHotReloadStorage) Read(p []byte) (n int, err error) {
+func (j *fileHotReloadStorage) Read(p []byte) (n int, err error) {
+	j.lock.Lock()
+	defer j.lock.Unlock()
 	if j.file == nil {
 		j.file, err = os.OpenFile(j.filename, os.O_RDWR, 0600)
 		if os.IsNotExist(err) {
@@ -43,35 +41,42 @@ func (j *jsonFileHotReloadStorage) Read(p []byte) (n int, err error) {
 	return j.file.Read(p)
 }
 
-func (j *jsonFileHotReloadStorage) Write(p []byte) (n int, err error) {
+func (j *fileHotReloadStorage) Write(p []byte) (n int, err error) {
+	j.lock.Lock()
+	defer j.lock.Unlock()
 	if j.file == nil {
 		j.file, err = os.Create(j.filename)
 		if err != nil {
 			return 0, err
 		}
 	}
-	// 为什么这里要对文件进行Truncate操作呢?
-	// 这是为了方便每次Dump的时候对文件进行重新写入, 而不是追加
-	// json序列化写入只会调用一次Write方法, 所以不要把这个方法当成io.Writer的Write方法
+	// reset offset and truncate file
 	if _, err = j.file.Seek(0, io.SeekStart); err != nil {
 		return
 	}
 	if err = j.file.Truncate(0); err != nil {
 		return
 	}
+	// json decode only write once
 	return j.file.Write(p)
 }
 
-func (j *jsonFileHotReloadStorage) Close() error {
+func (j *fileHotReloadStorage) Close() error {
+	j.lock.Lock()
+	defer j.lock.Unlock()
 	if j.file == nil {
 		return nil
 	}
 	return j.file.Close()
 }
 
-// NewJsonFileHotReloadStorage 创建JsonFileHotReloadStorage
+// Deprecated: use NewFileHotReloadStorage instead
+// 不再单纯以json的格式存储，支持了用户自定义序列化方式
 func NewJsonFileHotReloadStorage(filename string) io.ReadWriteCloser {
-	return &jsonFileHotReloadStorage{filename: filename}
+	return NewFileHotReloadStorage(filename)
 }
 
-var _ HotReloadStorage = (*jsonFileHotReloadStorage)(nil)
+// NewFileHotReloadStorage implements HotReloadStorage
+func NewFileHotReloadStorage(filename string) io.ReadWriteCloser {
+	return &fileHotReloadStorage{filename: filename}
+}

@@ -2,7 +2,8 @@ package openwechat
 
 import (
 	"errors"
-	"strconv"
+	"fmt"
+	"net/url"
 )
 
 /*
@@ -55,10 +56,10 @@ type WebInitResponse struct {
 	ChatSet             string
 	SKey                string
 	BaseResponse        BaseResponse
-	SyncKey             SyncKey
-	User                User
-	MPSubscribeMsgList  []MPSubscribeMsg
-	ContactList         []User
+	SyncKey             *SyncKey
+	User                *User
+	MPSubscribeMsgList  []*MPSubscribeMsg
+	ContactList         Members
 }
 
 // MPSubscribeMsg 公众号的订阅信息
@@ -67,12 +68,14 @@ type MPSubscribeMsg struct {
 	Time           int64
 	UserName       string
 	NickName       string
-	MPArticleList  []struct {
-		Title  string
-		Cover  string
-		Digest string
-		Url    string
-	}
+	MPArticleList  []*MPArticle
+}
+
+type MPArticle struct {
+	Title  string
+	Cover  string
+	Digest string
+	Url    string
 }
 
 type UserDetailItem struct {
@@ -91,30 +94,6 @@ func NewUserDetailItemList(members Members) UserDetailItemList {
 	return list
 }
 
-type SyncCheckResponse struct {
-	RetCode  string
-	Selector string
-}
-
-func (s SyncCheckResponse) Success() bool {
-	return s.RetCode == "0"
-}
-
-func (s SyncCheckResponse) NorMal() bool {
-	return s.Success() && s.Selector == "0"
-}
-
-func (s SyncCheckResponse) Err() error {
-	if s.Success() {
-		return nil
-	}
-	i, err := strconv.Atoi(s.RetCode)
-	if err != nil {
-		return errors.New("sync check unknown error")
-	}
-	return errors.New(Ret(i).String())
-}
-
 type WebWxSyncResponse struct {
 	AddMsgCount            int
 	ContinueFlag           int
@@ -123,7 +102,7 @@ type WebWxSyncResponse struct {
 	ModContactCount        int
 	Skey                   string
 	SyncCheckKey           SyncKey
-	SyncKey                SyncKey
+	SyncKey                *SyncKey
 	BaseResponse           BaseResponse
 	ModChatRoomMemberList  Members
 	AddMsgList             []*Message
@@ -142,9 +121,49 @@ type WebWxBatchContactResponse struct {
 	ContactList  []*User
 }
 
-type CheckLoginResponse struct {
-	Code string
-	Raw  []byte
+// CheckLoginResponse 检查登录状态的响应body
+type CheckLoginResponse []byte
+
+// RedirectURL 重定向的URL
+func (c CheckLoginResponse) RedirectURL() (*url.URL, error) {
+	code, err := c.Code()
+	if err != nil {
+		return nil, err
+	}
+	if code != LoginCodeSuccess {
+		return nil, fmt.Errorf("expect status code %s, but got %s", LoginCodeSuccess, code)
+	}
+	results := redirectUriRegexp.FindSubmatch(c)
+	if len(results) != 2 {
+		return nil, errors.New("redirect url does not match")
+	}
+	return url.Parse(string(results[1]))
+}
+
+// Code 获取当前的登录检查状态的代码
+func (c CheckLoginResponse) Code() (LoginCode, error) {
+	results := statusCodeRegexp.FindSubmatch(c)
+	if len(results) != 2 {
+		return "", errors.New("error status code match")
+	}
+	code := string(results[1])
+	return LoginCode(code), nil
+}
+
+// Avatar 获取扫码后的用户头像, base64编码
+func (c CheckLoginResponse) Avatar() (string, error) {
+	code, err := c.Code()
+	if err != nil {
+		return "", err
+	}
+	if code != LoginCodeScanned {
+		return "", nil
+	}
+	results := avatarRegexp.FindSubmatch(c)
+	if len(results) != 2 {
+		return "", errors.New("avatar does not match")
+	}
+	return string(results[1]), nil
 }
 
 type MessageResponse struct {
@@ -166,4 +185,11 @@ type PushLoginResponse struct {
 
 func (p PushLoginResponse) Ok() bool {
 	return p.Ret == "0" && p.UUID != ""
+}
+
+func (p PushLoginResponse) Err() error {
+	if p.Ok() {
+		return nil
+	}
+	return errors.New(p.Msg)
 }

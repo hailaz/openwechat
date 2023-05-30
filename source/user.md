@@ -131,6 +131,8 @@ groups, err := self.Groups()  // self.Groups(true)
 
 注：群组列表只显示手机端微信：通讯录：群聊里面的群组，若想将别的群组加入通讯录，点击群组，设置为`保存到通讯录`即可（安卓机）
 
+如果需要获取不在通讯录里面的群组，则需要收到来自该群组的消息，然后再次调用`self.Groups()`来获取
+
 `Groups`：可接受`bool`值来判断是否获取最新的群组
 
 
@@ -400,10 +402,10 @@ func (f Friends) SendText(text string, delay ...time.Duration) error
 #### 群发图片
 
 ```go
-func (f Friends) SendImage(file *os.File, delay ...time.Duration) error 
+func (f Friends) SendImage(file io.Reader, delay ...time.Duration) error 
 ```
 
-* `file`：`os.file`类型，即发送图片的文件指针
+* `file`：`io.Reader`类型。
 * `delay`：每次发送消息的间隔（发送消息过快可能会被wx检测到，最好加上间隔时间）
 
 
@@ -411,10 +413,10 @@ func (f Friends) SendImage(file *os.File, delay ...time.Duration) error
 #### 群发文件
 
 ```go
-func (f Friends) SendFile(file *os.File, delay ...time.Duration) error
+func (f Friends) SendFile(file io.Reader, delay ...time.Duration) error
 ```
 
-* `file`：`os.file`类型，即发送文件的文件指针
+* `file`：`io.Reader`类型。
 * `delay`：每次发送消息的间隔（发送消息过快可能会被wx检测到，最好加上间隔时间）
 
 
@@ -545,10 +547,10 @@ func (g Groups) SendText(text string, delay ...time.Duration) error
 #### 群发图片
 
 ```go
-func (g Groups) SendImage(file *os.File, delay ...time.Duration) error
+func (g Groups) SendImage(file io.Reader, delay ...time.Duration) error
 ```
 
-* `file`：`os.file`类型，即发送文件的文件指针
+* `file`：`io.Reader`类型。
 * `delay`：每次发送消息的间隔（发送消息过快可能会被wx检测到，最好加上间隔时间）
 
 
@@ -556,10 +558,10 @@ func (g Groups) SendImage(file *os.File, delay ...time.Duration) error
 #### 群发文件
 
 ```go
-func (g Groups) SendFile(file *os.File, delay ...time.Duration) error
+func (g Groups) SendFile(file io.Reader, delay ...time.Duration) error
 ```
 
-* `file`：`os.file`类型，即发送文件的文件指针
+* `file`：`io.Reader`类型。
 * `delay`：每次发送消息的间隔（发送消息过快可能会被wx检测到，最好加上间隔时间）
 
 
